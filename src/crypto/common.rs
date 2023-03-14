@@ -1,13 +1,9 @@
-
 use rand::{Rng, RngCore};
 use std::collections::HashSet;
 use std::collections::HashMap;
-use base64::{Engine as _, engine::general_purpose};
 
 use crate::util::Error;
 use crate::stats;
-use crate::crypto::common;
-
 
 
 // We cannot build the HashMap statically/constantly, annoyingly
@@ -146,13 +142,12 @@ pub fn round_up_to_nearest_multiple(n: usize, m: usize) -> usize {
 // We pad with a whole block of 0u8 when already a multiple, to ensure
 // we can decode
 pub fn pad_pkcs_7(buf: &[u8], block_size: usize) -> Vec<u8> {
-    if buf.len() % block_size == 0 { return buf.to_vec() }
-
-    let full_length = round_up_to_nearest_multiple(buf.len(), block_size);
-    let padding_length = full_length - buf.len();
-    assert!(padding_length < (u8::MAX as usize));
-    let pad = padding_length as u8;
-    [buf, &vec![pad; padding_length]].concat()
+    let n = buf.len() % block_size;
+    let padding_length = block_size - n;
+    let padding_value = 
+        if n == 0 { 0u8 }
+        else      { padding_length as u8 };
+    [buf, &vec![padding_value; padding_length]].concat()
 }
 
 #[test]
@@ -161,6 +156,20 @@ fn test_pad_pkcs_7() {
     let expected = b"YELLOW SUBMARINE\x04\x04\x04\x04".to_vec();
     let result = pad_pkcs_7(case, 20);
     assert_eq!(expected, result);
+
+    let expected_2 = [
+        case.to_vec(),
+        vec![0; 16],
+    ].concat();
+    let result_2 = pad_pkcs_7(case, case.len());
+    assert_eq!(expected_2, result_2);
+}
+
+// Sometimes, we do NOT want to pad if we are already at size. E.g., for padding
+// a key or IV. In these cases, simply return the value
+pub fn pad_pkcs_7_if_required(buf: &[u8], block_size: usize) -> Vec<u8> {
+    if buf.len() % block_size == 0 { buf.to_vec() }
+    else { pad_pkcs_7(buf, block_size) }
 }
 
 pub fn strip_pad_pkcs_7(buf: &[u8], block_size: usize) -> Result<Vec<u8>, Error> {
@@ -194,6 +203,20 @@ fn test_strip_pad_pkcs_7() {
     let case_3 = [b"YELLOW SUBMARINE", vec![0; 16].as_slice()].concat();
     let result_3 = strip_pad_pkcs_7(&case_3, 16);
     assert_eq!(Ok(expected), result_3);
+
+    // Cases from Challenge 15
+    let case_4 = b"ICE ICE BABY\x04\x04\x04\x04";
+    let expected_4 = b"ICE ICE BABY".to_vec();
+    let result_4 = strip_pad_pkcs_7(case_4, case_4.len());
+    assert_eq!(Ok(expected_4), result_4);
+
+    let case_5 = b"ICE ICE BABY\x05\x05\x05\x05";
+    let result_5 = strip_pad_pkcs_7(case_5, case_5.len());
+    assert_eq!(Err(Error::ParseError {}), result_5); 
+
+    let case_6 = b"ICE ICE BABY\x05\x05\x05\x05";
+    let result_6 = strip_pad_pkcs_7(case_6, case_6.len());
+    assert_eq!(Err(Error::ParseError {}), result_6);
 }
 
 pub fn generate_random_bytes<const N: usize>() -> [u8; N] {

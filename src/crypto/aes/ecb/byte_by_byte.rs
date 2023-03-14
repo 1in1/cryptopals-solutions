@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use base64::{Engine as _, engine::general_purpose};
 use openssl::symm::{encrypt, decrypt, Cipher, Crypter, Mode};
+use rand::Rng;
 
 use crate::crypto::aes::determine_block_size;
 use crate::crypto::common::{generate_random_bytes, pad_pkcs_7, repeating_block};
@@ -18,7 +19,7 @@ fn test_detect_aes_128_ecb() {
     assert_eq!(expected, results[0].as_bytes());
 }
 
-pub fn attack_aes_ecb(oracle: &impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
+pub fn attack_aes_ecb_byte_by_byte_no_prefix(oracle: &impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
     // Determine the block size
     let initial_size = oracle(&Vec::new()).len();
     let block_size = determine_block_size(oracle);
@@ -61,7 +62,7 @@ pub fn attack_aes_ecb(oracle: &impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
 }
 
 #[test]
-fn test_attack_aes_ecb() {
+fn test_attack_aes_ecb_byte_by_byte_no_prefix() {
     let unknown_string = b"Um9sbGluJyBpbiBteSA1LjAKV2l0aCBteSByYWctdG9wIGRvd24gc28gbXkgaGFpciBjYW4gYmxvdwpUaGUgZ2lybGllcyBvbiBzdGFuZGJ5IHdhdmluZyBqdXN0IHRvIHNheSBoaQpEaWQgeW91IHN0b3A/IE5vLCBJIGp1c3QgZHJvdmUgYnkK";
     let unknown = general_purpose::STANDARD
         .decode(unknown_string)
@@ -77,6 +78,71 @@ fn test_attack_aes_ecb() {
 
     let expected = b"Rollin' in my 5.0\nWith my rag-top down so my hair can blow\nThe girlies on standby waving just to say hi\nDid you stop? No, I just drove by\n".to_vec();
 
-    let result: Vec<u8> = attack_aes_ecb(&oracle);
+    let result: Vec<u8> = attack_aes_ecb_byte_by_byte_no_prefix(&oracle);
     assert_eq!(result, expected);
+}
+
+pub fn attack_aes_ecb_byte_by_byte(oracle: &impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
+    // We only need to account for the random string at the beginning
+    // So work out a padding to use to bring us to the beginning of a block, 
+    // then apply the existing method
+
+    // To figure out the base offset, we need to search for a repeated block
+    let block_size = determine_block_size(oracle);
+    let mut len = 0;
+    let mut base_offset = 0;
+    for i in 0..1000 {
+        let payload = [
+            vec![b'A'; i],
+            vec![b'B'; block_size],
+            vec![b'B'; block_size],
+        ].concat();
+        let result = oracle(&payload);
+        let repeated_b_block = repeating_block(&result, block_size);
+        match repeated_b_block {
+            Some((idx, _)) => { len = i; base_offset = (idx - 1)*block_size; break },
+            None           => continue
+        }
+    }
+
+    let wrapped_oracle = move |buf: &[u8]| {
+        let padded_buf = [vec![b'A'; len], buf.to_vec()].concat();
+        let result = oracle(&padded_buf);
+        result[base_offset..].to_vec()
+    };
+
+    attack_aes_ecb_byte_by_byte_no_prefix(&wrapped_oracle)
+}
+
+#[test]
+fn test_attack_aes_ecb_byte_by_byte() {
+    let unknown_string = b"Um9sbGluJyBpbiBteSA1LjAKV2l0aCBteSByYWctdG9wIGRvd24gc28gbXkgaGFpciBjYW4gYmxvdwpUaGUgZ2lybGllcyBvbiBzdGFuZGJ5IHdhdmluZyBqdXN0IHRvIHNheSBoaQpEaWQgeW91IHN0b3A/IE5vLCBJIGp1c3QgZHJvdmUgYnkK";
+    let unknown = general_purpose::STANDARD
+        .decode(unknown_string)
+        .expect("Base64 decoding failed");
+    let fixed_key: [u8; 16] = generate_random_bytes();
+    let cipher = Cipher::aes_128_ecb();
+    let mut rng = rand::thread_rng();
+
+    let expected = b"Rollin' in my 5.0\nWith my rag-top down so my hair can blow\nThe girlies on standby waving just to say hi\nDid you stop? No, I just drove by\n".to_vec();
+
+    for _ in 0..10 {
+        let unknown_clone = unknown.clone();
+        let garbage_padding: [u8; 100] = generate_random_bytes();
+        let pre_pad_len: usize = rng.gen_range(0..=100);
+        let random_initial_string = garbage_padding[0..pre_pad_len].to_vec();
+
+        let oracle = move |buf: &[u8]| {
+            let full_buf = [
+                random_initial_string.clone(),
+                buf.to_vec(), 
+                unknown_clone.clone()
+            ].concat();
+            let padded = pad_pkcs_7(&full_buf, 16);
+            encrypt(cipher, &fixed_key, None, &padded).unwrap()
+        };
+
+        let result: Vec<u8> = attack_aes_ecb_byte_by_byte(&oracle);
+        assert_eq!(result, expected);
+    }
 }

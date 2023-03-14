@@ -12,4 +12,3 @@ pub fn chi_sq<T: Eq + Hash>(observed: HashMap<T, f64>, expected: HashMap<T, f64>
             a + (( (e - o).powi(2) ) / e)
         })
 }
-

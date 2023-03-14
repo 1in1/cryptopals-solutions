@@ -108,5 +108,3 @@ fn test_key_equals_val_parse() {
     assert_eq!(Error::ParseError {}, key_equals_val_parse(invalid_case_1).unwrap_err());
     assert_eq!(Error::ParseError {}, key_equals_val_parse(invalid_case_2).unwrap_err());
 }
-
-

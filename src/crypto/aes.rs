@@ -1,9 +1,10 @@
+#[cfg(test)]
 extern crate itertools;
 use itertools::Itertools;
 
-use crate::crypto::{self, common};
-use rand::{Rng, RngCore};
-use openssl::symm::{encrypt, decrypt, Cipher, Crypter, Mode};
+use crate::crypto::common;
+use rand::Rng;
+use openssl::symm::{encrypt, Cipher};
 
 pub mod ecb;
 pub mod cbc;
