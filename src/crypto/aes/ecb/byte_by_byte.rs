@@ -5,6 +5,7 @@ use rand::Rng;
 
 use crate::crypto::aes::determine_block_size;
 use crate::crypto::common::{generate_random_bytes, pad_pkcs_7, repeating_block};
+use crate::crypto::oracle::*;
 
 #[test]
 fn test_detect_aes_128_ecb() {
@@ -19,7 +20,7 @@ fn test_detect_aes_128_ecb() {
     assert_eq!(expected, results[0].as_bytes());
 }
 
-pub fn attack_aes_ecb_byte_by_byte_no_prefix(oracle: &impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
+pub fn attack_aes_ecb_byte_by_byte_no_prefix(oracle: &dyn Oracle) -> Vec<u8> {
     // Determine the block size
     let initial_size = oracle(&Vec::new()).len();
     let block_size = determine_block_size(oracle);
@@ -67,14 +68,11 @@ fn test_attack_aes_ecb_byte_by_byte_no_prefix() {
     let unknown = general_purpose::STANDARD
         .decode(unknown_string)
         .expect("Base64 decoding failed");
-    let fixed_key: [u8; 16] = generate_random_bytes();
-    let cipher = Cipher::aes_128_ecb();
 
-    let oracle = move |buf: &[u8]| {
-        let full_buf = [buf, &unknown].concat();
-        let padded = pad_pkcs_7(&full_buf, 16);
-        encrypt(cipher, &fixed_key, None, &padded).unwrap()
-    };
+    let oracle = get_id_oracle()
+        .pullback_add_right_padding(&unknown)
+        .pushforward_pkcs_7(16)
+        .pushforward_ecb_encrypt_fixed_key();
 
     let expected = b"Rollin' in my 5.0\nWith my rag-top down so my hair can blow\nThe girlies on standby waving just to say hi\nDid you stop? No, I just drove by\n".to_vec();
 
@@ -82,7 +80,7 @@ fn test_attack_aes_ecb_byte_by_byte_no_prefix() {
     assert_eq!(result, expected);
 }
 
-pub fn attack_aes_ecb_byte_by_byte(oracle: &impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
+pub fn attack_aes_ecb_byte_by_byte(oracle: &dyn Oracle) -> Vec<u8> {
     // We only need to account for the random string at the beginning
     // So work out a padding to use to bring us to the beginning of a block, 
     // then apply the existing method
@@ -120,27 +118,14 @@ fn test_attack_aes_ecb_byte_by_byte() {
     let unknown = general_purpose::STANDARD
         .decode(unknown_string)
         .expect("Base64 decoding failed");
-    let fixed_key: [u8; 16] = generate_random_bytes();
-    let cipher = Cipher::aes_128_ecb();
-    let mut rng = rand::thread_rng();
-
     let expected = b"Rollin' in my 5.0\nWith my rag-top down so my hair can blow\nThe girlies on standby waving just to say hi\nDid you stop? No, I just drove by\n".to_vec();
 
     for _ in 0..10 {
-        let unknown_clone = unknown.clone();
-        let garbage_padding: [u8; 100] = generate_random_bytes();
-        let pre_pad_len: usize = rng.gen_range(0..=100);
-        let random_initial_string = garbage_padding[0..pre_pad_len].to_vec();
-
-        let oracle = move |buf: &[u8]| {
-            let full_buf = [
-                random_initial_string.clone(),
-                buf.to_vec(), 
-                unknown_clone.clone()
-            ].concat();
-            let padded = pad_pkcs_7(&full_buf, 16);
-            encrypt(cipher, &fixed_key, None, &padded).unwrap()
-        };
+        let oracle = get_id_oracle()
+            .pullback_add_random_left_padding::<0, 100>()
+            .pullback_add_right_padding(&unknown)
+            .pushforward_pkcs_7(16)
+            .pushforward_ecb_encrypt_fixed_key();
 
         let result: Vec<u8> = attack_aes_ecb_byte_by_byte(&oracle);
         assert_eq!(result, expected);

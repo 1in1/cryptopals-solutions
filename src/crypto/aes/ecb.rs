@@ -1,11 +1,4 @@
-extern crate rand;
-extern crate itertools;
-use rand::{Rng, RngCore};
-use itertools::Itertools;
-use std::slice::Windows;
-use snafu::prelude::*;
 use openssl::symm::{encrypt, decrypt, Cipher, Crypter, Mode};
-use std::collections::HashSet;
 use base64::{Engine as _, engine::general_purpose};
 
 pub mod byte_by_byte;

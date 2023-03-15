@@ -2,64 +2,60 @@
 extern crate itertools;
 use itertools::Itertools;
 
-use crate::crypto::common;
+use crate::crypto::common::{generate_random_bytes, repeating_block};
 use rand::Rng;
 use openssl::symm::{encrypt, Cipher};
 
 pub mod ecb;
 pub mod cbc;
 
+use crate::crypto::oracle::*;
 
-pub fn encryption_oracle(buf: &[u8], run_ecb: bool) -> Result<Vec<u8>, openssl::error::ErrorStack> {
-    let mut rng = rand::thread_rng();
-    let garbage_padding: [u8; 20] = common::generate_random_bytes();
-    let pre_pad_len:  usize = rng.gen_range(5..=10);
-    let post_pad_len: usize = rng.gen_range(5..=10);
-    let padded_buf: Vec<u8> = [
-        &garbage_padding[0..pre_pad_len],
-        buf,
-        &garbage_padding[pre_pad_len..(pre_pad_len + post_pad_len)]
-    ].concat();
-    let key: [u8; 16] = common::generate_random_bytes();
-
-    if run_ecb {
-        let cipher = Cipher::aes_128_ecb();
-        encrypt(cipher, &key, None, &padded_buf)
-    } else {
-        let iv: [u8; 16] = common::generate_random_bytes();
-        cbc::aes_cbc_encrypt(&padded_buf, &key, &iv)
-    }
-}
-
-pub fn detect_ecb_or_cbc(oracle: &impl Fn(&[u8]) -> Vec<u8>) -> Option<bool> {
-    // The prepended padding is only 5-10 bytes
+// Given an oracle of the form:
+// (fixed ECB or CBC) . (fixed lpad ++) . (++ fixed rpad)
+// Determine whether the oracle is using ECB or CBC
+pub fn detect_ecb_or_cbc(oracle: &dyn Oracle) -> Option<bool> {
     // If we pass a constant string of As, we will get a result which iterates
     // after the first block if ECB, and doesn't iterate in CBC
-    // We also drop the last two blocks
-    let s = vec![b'A'; 400];
-    let enc = oracle(&s);
-    let blocks: Vec<&[u8]> = enc.chunks(16).collect();
-    let n = blocks.len();
-    let unique_inner_blocks: Vec<Vec<u8>> = blocks[1..(n-2)]
-        .iter()
-        .map(|x| x.to_vec() )
-        .unique()
-        .collect();
-    let unique_blocks_count = unique_inner_blocks.len();
+    let block_size = determine_block_size(oracle);
 
-    if unique_blocks_count == 1 { Some(true) }
-    else if unique_blocks_count > 1 { Some(false) }
-    else { None }
+    // Take 4*block_size to ensure we aren't prevented by left or right padding
+    let payload = vec![b'A'; 4*block_size];
+    let encrypted = oracle(&payload);
+    let repeated = repeating_block(&encrypted, block_size);
+    let maybe_confident_ecb: Option<bool> = repeated.and_then(|(_, repeated_a)| {
+        let payload = vec![b'B'; 4*block_size];
+        let encrypted = oracle(&payload);
+        let repeated = repeating_block(&encrypted, block_size);
+        repeated.and_then(|(_, repeated_b)| {
+            if repeated_a == repeated_b {
+                Some(false)
+            } else {
+                Some(true)
+            }
+        })
+    });
+    match maybe_confident_ecb {
+        Some(true)  => Some(true),  // We had different repeating blocks. ECB
+        Some(false) => None,        // We had the same repeating block both times.
+                                    // Thus, we cannot tell which mode it's in
+        None        => Some(false), // We failed to reliably find repeating blocks. CBC
+    }
 }
 
 #[test]
 fn test_detect_ecb_or_cbc() {
-    let mut rng = rand::thread_rng();
     for _ in 0..100 {
-        let run_ecb = rng.gen();
-        let oracle = move |buf: &[u8]| {
-           encryption_oracle(&buf, run_ecb).unwrap()
-        };
+        let cbc_oracle = get_id_oracle()
+            .pullback_add_random_left_padding::<5,10>()
+            .pullback_add_random_right_padding::<5,10>()
+            .pushforward_cbc_encrypt_fixed_key();
+        let ecb_oracle = get_id_oracle()
+            .pullback_add_random_left_padding::<5,10>()
+            .pullback_add_random_right_padding::<5,10>()
+            .pushforward_ecb_encrypt_fixed_key();
+        let (run_ecb, oracle) = choose_random(ecb_oracle, cbc_oracle);
+
         match detect_ecb_or_cbc(&oracle) {
             Some(detected_is_ecb) => assert_eq!(run_ecb, detected_is_ecb),
             None                  => assert!(false)
@@ -67,7 +63,10 @@ fn test_detect_ecb_or_cbc() {
     }
 }
 
-pub fn determine_block_size(oracle: &impl Fn(&[u8]) -> Vec<u8>) -> usize {
+// Given an oracle of type
+// (fixed block encryption function) . (fixed lpad ++) . (++ fixed rpad)
+// Determine the block size in use
+pub fn determine_block_size(oracle: &dyn Oracle) -> usize {
     let initial_size = oracle(&Vec::new()).len();
     let mut input: Vec<u8> = Vec::new();
     while oracle(&input).len() == initial_size { input.push(b'A'); }
@@ -76,4 +75,3 @@ pub fn determine_block_size(oracle: &impl Fn(&[u8]) -> Vec<u8>) -> usize {
     while oracle(&input).len() == intermediate_size { input.push(b'A'); }
     input.len() - block_size
 }
-

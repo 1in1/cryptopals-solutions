@@ -10,6 +10,7 @@ use crate::crypto::common::{
     round_up_to_nearest_multiple
 };
 use crate::crypto::aes::determine_block_size;
+use crate::crypto::oracle::*;
 
 #[derive(Debug, PartialEq)]
 struct Profile {
@@ -62,7 +63,7 @@ impl Profile {
 
 
 // we have to assume role=admin goes at the end here...
-pub fn attack_ecb_cut_and_paste(encode_and_encrypt: impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
+pub fn attack_ecb_cut_and_paste(encode_and_encrypt: &dyn Oracle) -> Vec<u8> {
     let block_size = determine_block_size(&encode_and_encrypt);
 
     // Compute the number of dead bytes we need to pass before we get a new block, AND
@@ -126,7 +127,7 @@ fn test_attack_ecb_cut_and_paste() {
    
     let expected_role_value = b"admin".as_slice();
 
-    let encrypted_malicious_profile = attack_ecb_cut_and_paste(encode_and_encrypt);
+    let encrypted_malicious_profile = attack_ecb_cut_and_paste(&encode_and_encrypt);
     let decrypted_malicious_profile = decrypt(cipher, &key, None, &encrypted_malicious_profile)
         .unwrap();
     let malicious_profile = util::key_equals_val_parse(&decrypted_malicious_profile)
