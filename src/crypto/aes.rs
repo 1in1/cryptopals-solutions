@@ -8,6 +8,7 @@ use openssl::symm::{encrypt, Cipher};
 
 pub mod ecb;
 pub mod cbc;
+pub mod ctr;
 
 use crate::crypto::oracle::*;
 

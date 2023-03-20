@@ -26,7 +26,7 @@ pub fn byte_xor(buf: &[u8], b: u8) -> Vec<u8> {
 pub fn repeating_key_xor(buf1: &[u8], buf2: &[u8]) -> Vec<u8> {
     let n = buf1.len();
     let m = buf2.len();
-    assert!(m <= n);
+    //assert!(m <= n);
     let mut out = Vec::with_capacity(n);
     for i in 0..(n-1) {
         out.push(buf1[i] ^ buf2[i % m]);

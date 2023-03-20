@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 base64 = "0.21.0"
+concat-arrays = "0.1.2"
 hex = "0.4.3"
 hex-literal = "0.3.4"
 itertools = "0.10.5"

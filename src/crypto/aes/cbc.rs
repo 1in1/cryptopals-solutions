@@ -2,6 +2,7 @@ use base64::{Engine as _, engine::general_purpose};
 use openssl::symm::{encrypt, decrypt, Cipher, Crypter, Mode};
 
 pub mod bitflip;
+pub mod padding;
 
 use crate::crypto::common::{pad_pkcs_7, pad_pkcs_7_if_required};
 use crate::crypto::xor::fixed_xor;
